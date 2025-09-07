@@ -513,6 +513,16 @@ function renderWelcome() {
     renderAuthForm(true);
   });
   container.appendChild(logoutBtn);
+
+  // history button to view past sectors and tasks
+  const historyBtn = document.createElement('button');
+  historyBtn.className = 'button secondary small';
+  historyBtn.style.marginTop = '10px';
+  historyBtn.innerHTML = '<i class="fa-solid fa-clock-rotate-left"></i> View History';
+  historyBtn.addEventListener('click', () => {
+    renderHistory();
+  });
+  container.appendChild(historyBtn);
   // leaderboard
   const leaderboardDiv = document.createElement('div');
   leaderboardDiv.className = 'leaderboard-container';
@@ -946,6 +956,91 @@ function startCountdown(callback) {
     }
   }
   ignite();
+}
+
+/**
+ * Render the history page showing past tasks and sector times for the current user.
+ * Displays data grouped by date and sector. Each task shows its name and duration.
+ */
+function renderHistory() {
+  clearInterval(sectorTimerInterval);
+  sectorTimerInterval = null;
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  const container = document.createElement('div');
+  container.className = 'history-container';
+  const heading = document.createElement('h2');
+  heading.innerHTML = '<i class="fa-solid fa-clock-rotate-left"></i> Your Work History';
+  container.appendChild(heading);
+  ensureUserSocialData(currentUser);
+  const records = data.users[currentUser].records || {};
+  const dates = Object.keys(records).sort((a,b) => new Date(b) - new Date(a));
+  if (dates.length === 0) {
+    const noData = document.createElement('p');
+    noData.textContent = 'No history available yet.';
+    container.appendChild(noData);
+  } else {
+    dates.forEach(dateKey => {
+      const dateDiv = document.createElement('div');
+      dateDiv.className = 'history-date';
+      const dateHeader = document.createElement('h3');
+      // format date to more friendly string
+      const d = new Date(dateKey + 'T00:00:00');
+      dateHeader.textContent = d.toDateString();
+      dateDiv.appendChild(dateHeader);
+      const sectors = records[dateKey].sectors || {};
+      ['1','2','3'].forEach(sectorNum => {
+        const sector = sectors[sectorNum];
+        if (!sector || !sector.tasks || sector.tasks.length === 0) return;
+        const sectorDiv = document.createElement('div');
+        sectorDiv.className = 'history-sector';
+        const sectorHeader = document.createElement('h4');
+        sectorHeader.textContent = `Sector ${sectorNum}`;
+        sectorDiv.appendChild(sectorHeader);
+        // compute total time for sector (sum of finished task durations)
+        let totalSector = 0;
+        sector.tasks.forEach(task => {
+          if (task.status === 'Finished' && typeof task.duration === 'number') {
+            totalSector += task.duration;
+          }
+        });
+        const sectorTotal = document.createElement('p');
+        sectorTotal.textContent = `Total time: ${formatDuration(totalSector)}`;
+        sectorDiv.appendChild(sectorTotal);
+        // tasks list
+        const list = document.createElement('ul');
+        list.className = 'history-task-list';
+        sector.tasks.forEach((task, idx) => {
+          const li = document.createElement('li');
+          const nameSpan = document.createElement('span');
+          nameSpan.textContent = task.name || `Task ${idx + 1}`;
+          const timeSpan = document.createElement('span');
+          let dur = '—';
+          if (task.status === 'Finished' && typeof task.duration === 'number') {
+            dur = formatDuration(task.duration);
+          }
+          timeSpan.textContent = dur;
+          li.appendChild(nameSpan);
+          li.appendChild(document.createTextNode(' – '));
+          li.appendChild(timeSpan);
+          list.appendChild(li);
+        });
+        sectorDiv.appendChild(list);
+        dateDiv.appendChild(sectorDiv);
+      });
+      container.appendChild(dateDiv);
+    });
+  }
+  // Back button
+  const backBtn = document.createElement('button');
+  backBtn.className = 'button secondary small';
+  backBtn.style.marginTop = '20px';
+  backBtn.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back';
+  backBtn.addEventListener('click', () => {
+    renderWelcome();
+  });
+  container.appendChild(backBtn);
+  app.appendChild(container);
 }
 
 // Start the application
