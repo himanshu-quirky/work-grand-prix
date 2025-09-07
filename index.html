@@ -8,11 +8,30 @@
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
   <!-- Import Font Awesome for icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-yH7LCoE9w9WZJkIZNxUpC9dkF7s2mLr4BX6kS7y29qbWuyqlM5SgUstZT+0U4zU8qNbXjJ54E2yBzpujBsrIwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <!-- App styles -->
+  <!-- App styles (use root‑level CSS) -->
   <link rel="stylesheet" href="style.css">
+
+  <!-- Supabase configuration: populate these values from your project settings. The
+       URL should match your Supabase project ID (e.g. https://ihlcpsqisoklqvcllejz.supabase.co) and
+       the anon key comes from the API settings page. These globals are
+       referenced by supabaseClient.js. -->
+  <script>
+    // Set these to your Supabase project URL and anon public key. They are
+    // public values and safe to embed in client‑side code. Without these
+    // values the app will fall back to localStorage for data storage.
+    window.SUPABASE_URL = "https://ihlcpsqisoklqvcllejz.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlobGNwc3Fpc29rbHF2Y2xsZWp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcyNDE2MzYsImV4cCI6MjA3MjgxNzYzNn0.bC3_KtS1JkXOlNj17QpN0oBD8U4xlfPHfAQa6MSYXHI";
+  </script>
+  <!-- Load Supabase UMD build. The library attaches itself as window.supabase. We use defer so it
+       loads after the document is parsed. -->
+  <script defer src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <!-- Load our Supabase client helper (ES module). This script depends on the
+       globals defined above and the Supabase library. -->
+  <script type="module" src="supabaseClient.js"></script>
 </head>
 <body>
   <div id="app"></div>
-  <script src="main.js"></script>
+  <!-- Load main application logic as an ES module so we can use import statements. -->
+  <script type="module" src="main.js"></script>
 </body>
 </html>

@@ -1,5 +1,17 @@
 // Main script for Work Grand Prix
 
+// Import Supabase helpers. These functions are defined in
+// supabaseClient.js and allow us to create users, sign in and fetch
+// profiles. Because this file is loaded as a module (see index.html),
+// the import syntax is supported.
+import { supa, signUpUsername, signInUsername, getCurrentProfile } from './supabaseClient.js';
+
+// The currently authenticated Supabase user and their profile. These
+// variables are set after login or registration. If null, no user is
+// logged in.
+let sessionUser = null;
+let profile = null;
+
 /*
  * Application state and constants
  */
@@ -142,6 +154,121 @@ function loadCurrentUser() {
 }
 
 /**
+ * Fetch tasks for a given date and sector from Supabase and merge them into
+ * the provided sectorData. This function will override local tasks with
+ * tasks from the database. Only runs when the user is authenticated.
+ *
+ * @param {string} dateKey YYYY‑MM‑DD date string representing the work day.
+ * @param {number} sector Sector number (1, 2 or 3).
+ * @param {object} sectorData Local object with a `tasks` array and possibly
+ *        other properties. The tasks array will be replaced with tasks
+ *        fetched from Supabase if available.
+ */
+async function syncTasksFromSupabase(dateKey, sector, sectorData) {
+  if (!sessionUser) return;
+  const { data: rows, error } = await supa
+    .from('tasks')
+    .select('*')
+    .eq('user_id', sessionUser.id)
+    .eq('work_date', dateKey)
+    .eq('sector', sector)
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('Supabase fetch tasks error:', error);
+    return;
+  }
+  if (!rows || !rows.length) {
+    // no tasks in DB; leave local tasks as is
+    return;
+  }
+  // Map Supabase rows to local task objects. We reuse the same shape as
+  // local tasks: { id, name, status, startTime, endTime, pauseDuration, pauseStart, duration }
+  sectorData.tasks = rows.map((row) => {
+    return {
+      id: row.id,
+      name: row.title || '',
+      status: row.status || 'Not started',
+      startTime: row.start_ts ? new Date(row.start_ts).getTime() : null,
+      endTime: row.end_ts ? new Date(row.end_ts).getTime() : null,
+      pauseDuration: row.pause_ms || 0,
+      pauseStart: null,
+      duration: row.duration_ms || null,
+    };
+  });
+  // Do not modify sectorData.startTime here; startTime is local only.
+}
+
+/**
+ * Upsert a single task to Supabase. If the task has no id, a new UUID
+ * will be generated on the server. Uses the current sessionUser to
+ * identify the owner. Errors are logged but not thrown.
+ *
+ * @param {string} dateKey Date key (YYYY‑MM‑DD) for the work day.
+ * @param {number} sector Sector number (1, 2 or 3).
+ * @param {object} task Local task object as defined in sectorData.tasks.
+ */
+async function saveTaskToSupabase(dateKey, sector, task) {
+  if (!sessionUser) return;
+  const row = {
+    id: task.id,
+    user_id: sessionUser.id,
+    work_date: dateKey,
+    sector: sector,
+    title: task.name || '',
+    status: task.status || 'Not started',
+    start_ts: task.startTime ? new Date(task.startTime).toISOString() : null,
+    end_ts: task.endTime ? new Date(task.endTime).toISOString() : null,
+    pause_ms: task.pauseDuration || 0,
+    duration_ms: task.duration || null,
+  };
+  try {
+    await supa.from('tasks').upsert(row);
+  } catch (err) {
+    console.error('Supabase upsert task error:', err);
+  }
+}
+
+/**
+ * Delete a task from Supabase. Useful when removing a task entirely before it
+ * has started. Once tasks are finished we typically keep them in the
+ * database for leaderboard purposes.
+ *
+ * @param {string} taskId Unique identifier of the task to delete.
+ */
+async function deleteTaskFromSupabase(taskId) {
+  if (!sessionUser) return;
+  try {
+    await supa.from('tasks').delete().eq('id', taskId);
+  } catch (err) {
+    console.error('Supabase delete task error:', err);
+  }
+}
+
+/**
+ * Retrieve the weekly leaderboard from Supabase. Returns an array of
+ * { username, total_time_ms }. If Supabase is unavailable or an error
+ * occurs, falls back to local computation via weeklyLeaderboard() which
+ * reads from localStorage.
+ */
+async function fetchWeeklyLeaderboard() {
+  if (!sessionUser) {
+    // If not authenticated, compute leaderboard locally
+    return weeklyLeaderboard();
+  }
+  try {
+    const { data: rows, error } = await supa.from('weekly_leaderboard').select('*');
+    if (error) {
+      console.error('Supabase fetch leaderboard error:', error);
+      return weeklyLeaderboard();
+    }
+    return rows.map((r) => ({ username: r.username, totalTimeMs: r.total_time_ms }));
+  } catch (e) {
+    console.error('Supabase leaderboard error:', e);
+    return weeklyLeaderboard();
+  }
+}
+
+/**
  * Announce to other tabs that this user is online/offline.
  * Uses the BroadcastChannel defined at the top of the script.
  */
@@ -248,9 +375,10 @@ function computeCurrentWeekLeaderboard() {
 /**
  * Update leaderboard display.
  */
-function renderLeaderboard(container) {
-  const results = computeCurrentWeekLeaderboard();
-  if (results.length === 0) {
+async function renderLeaderboard(container) {
+  // Fetch leaderboard from Supabase if available or fallback to local computation
+  const results = await fetchWeeklyLeaderboard();
+  if (!results || results.length === 0) {
     container.innerHTML = '<p>No data for this week yet.</p>';
     return;
   }
@@ -383,7 +511,7 @@ function renderAuthForm(isLogin = true) {
   heading.textContent = isLogin ? 'Login to Work Grand Prix' : 'Create your account';
   formContainer.appendChild(heading);
   const form = document.createElement('form');
-  form.onsubmit = (e) => {
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const username = form.elements['username'].value.trim();
     const password = form.elements['password'].value;
@@ -391,37 +519,36 @@ function renderAuthForm(isLogin = true) {
       alert('Please enter both username and password.');
       return;
     }
-    if (isLogin) {
-      // handle login
-      if (!data.users[username]) {
-        alert('User not found. Please register.');
-        return;
+    try {
+      if (isLogin) {
+        // Attempt to sign in using Supabase auth via pseudo‑email. Throws on failure.
+        const user = await signInUsername(username, password);
+        sessionUser = user;
+        profile = await getCurrentProfile();
+        // ensure we have social data locally
+        if (!data.users[username]) {
+          data.users[username] = { friends: [], friendRequests: [] };
+        }
+        currentUser = username;
+        saveCurrentUser(username);
+        saveData();
+        announceOnline(username);
+        renderWelcome();
+      } else {
+        // Registration: create auth user in Supabase and local social data
+        const newUser = await signUpUsername(username, password);
+        sessionUser = newUser;
+        profile = await getCurrentProfile();
+        if (!data.users[username]) {
+          data.users[username] = { friends: [], friendRequests: [] };
+        }
+        saveData();
+        alert('Account created! You can now log in.');
+        renderAuthForm(true);
       }
-      const stored = data.users[username].password;
-      if (stored !== password) {
-        alert('Incorrect password.');
-        return;
-      }
-      currentUser = username;
-      saveCurrentUser(username);
-      saveData();
-      renderWelcome();
-    } else {
-      // handle registration
-      if (data.users[username]) {
-        alert('Username already exists. Please choose another.');
-        return;
-      }
-      // create user with password, empty records and empty social data
-      data.users[username] = {
-        password: password,
-        records: {},
-        friends: [],
-        friendRequests: []
-      };
-      saveData();
-      alert('Account created! You can now log in.');
-      renderAuthForm(true);
+    } catch (err) {
+      console.error(err);
+      alert(err.message || 'Authentication error.');
     }
   };
   // username
@@ -618,9 +745,17 @@ function ensureCurrentSectorData() {
 /**
  * Render tasks management page for selected sector.
  */
-function renderSectorTasks() {
+async function renderSectorTasks() {
   ensureCurrentSectorData();
   const sectorData = data.users[currentUser].records[getTodayKey()].sectors[currentSector];
+  // If authenticated via Supabase, sync tasks from the database for this date/sector.
+  try {
+    if (sessionUser) {
+      await syncTasksFromSupabase(getTodayKey(), currentSector, sectorData);
+    }
+  } catch (e) {
+    console.warn('Failed to sync tasks from Supabase:', e);
+  }
   // Do not auto start the sector timer. The user must enter tasks and press Ready.
   clearInterval(sectorTimerInterval);
   const app = document.getElementById('app');
@@ -679,6 +814,8 @@ function renderSectorTasks() {
     };
     sectorData.tasks.push(newTask);
     saveData();
+    // Persist the new task to Supabase
+    saveTaskToSupabase(getTodayKey(), currentSector, newTask);
     renderSectorTasks();
   });
   const removeBtn = document.createElement('button');
@@ -694,8 +831,12 @@ function renderSectorTasks() {
       alert(`Minimum ${MIN_TASKS} tasks required in a sector.`);
       return;
     }
-    sectorData.tasks.pop();
+    const removedTask = sectorData.tasks.pop();
     saveData();
+    // remove from Supabase as well
+    if (removedTask && removedTask.id) {
+      deleteTaskFromSupabase(removedTask.id);
+    }
     renderSectorTasks();
   });
   controls.appendChild(addBtn);
@@ -752,6 +893,7 @@ function renderSectorTasks() {
       nameInput.addEventListener('change', (e) => {
         task.name = e.target.value;
         saveData();
+        saveTaskToSupabase(getTodayKey(), currentSector, task);
       });
       nameTd.appendChild(nameInput);
       tr.appendChild(nameTd);
@@ -811,6 +953,8 @@ function renderSectorTasks() {
           return;
         }
         saveData();
+        // persist running state to Supabase
+        saveTaskToSupabase(getTodayKey(), currentSector, task);
         updateTaskRows();
       });
       // Stop button
@@ -827,6 +971,8 @@ function renderSectorTasks() {
         task.endTime = null;
         task.duration = null;
         saveData();
+        // persist reset to Supabase
+        saveTaskToSupabase(getTodayKey(), currentSector, task);
         updateTaskRows();
       });
       // Pit-stop button (pause)
@@ -840,6 +986,8 @@ function renderSectorTasks() {
         task.status = 'Paused';
         task.pauseStart = Date.now();
         saveData();
+        // persist pause state
+        saveTaskToSupabase(getTodayKey(), currentSector, task);
         updateTaskRows();
       });
       // Finish lap button
@@ -864,6 +1012,8 @@ function renderSectorTasks() {
         if (task.duration < 0) task.duration = 0;
         task.status = 'Finished';
         saveData();
+        // persist finished state
+        saveTaskToSupabase(getTodayKey(), currentSector, task);
         updateTaskRows();
         // update leaderboard on finish
         renderLeaderboard(document.getElementById('leaderboard-body'));
@@ -912,8 +1062,25 @@ function renderSectorTasks() {
 /**
  * Initial application entry point.
  */
-function init() {
+async function init() {
   data = loadData();
+  // Attempt to restore Supabase session. If a session exists it will be
+  // returned even after a page refresh. When a user logs out the session is
+  // cleared automatically by the Supabase client.
+  try {
+    const { data: sessionData } = await supa.auth.getUser();
+    const user = sessionData ? sessionData.user : null;
+    if (user) {
+      sessionUser = user;
+      try {
+        profile = await getCurrentProfile();
+      } catch (e) {
+        console.warn('Failed to load profile:', e);
+      }
+    }
+  } catch (e) {
+    console.warn('Supabase getUser error:', e);
+  }
   currentUser = loadCurrentUser();
   if (currentUser && data.users[currentUser]) {
     renderWelcome();
