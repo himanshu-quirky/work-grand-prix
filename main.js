@@ -4,7 +4,11 @@
 // supabaseClient.js and allow us to create users, sign in and fetch
 // profiles. Because this file is loaded as a module (see index.html),
 // the import syntax is supported.
-import { supa, signUpUsername, signInUsername, getCurrentProfile } from './supabaseClient.js';
+// import { supa, signUpUsername, signInUsername, getCurrentProfile } from './supabaseClient.js';
+const supa = window.supa;
+const signUpUsername = window.signUpUsername;
+const signInUsername = window.signInUsername;
+const getCurrentProfile = window.getCurrentProfile;
 
 // The currently authenticated Supabase user and their profile. These
 // variables are set after login or registration. If null, no user is
