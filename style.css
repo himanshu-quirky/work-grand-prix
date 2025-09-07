@@ -358,6 +358,51 @@ p {
   background-color: #e10600;
 }
 
+/* History page styles */
+.history-container {
+  width: 100%;
+  max-width: 800px;
+  margin-top: 40px;
+  background-color: #1a1a1a;
+  border: 2px solid #333;
+  border-radius: 8px;
+  padding: 20px;
+}
+.history-date {
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #333;
+}
+.history-date h3 {
+  color: #e10600;
+  margin-bottom: 10px;
+}
+.history-sector {
+  margin-left: 15px;
+  margin-bottom: 10px;
+}
+.history-sector h4 {
+  margin-bottom: 5px;
+  color: #ffd700;
+}
+.history-sector p {
+  margin-bottom: 5px;
+  font-size: 0.9rem;
+  color: #ccc;
+}
+.history-task-list {
+  list-style: none;
+  padding-left: 20px;
+  margin: 0;
+}
+.history-task-list li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+  color: #eee;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .tasks-header {
