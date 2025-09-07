@@ -13,6 +13,50 @@ let data = null;            // Loaded data from localStorage
 let currentUser = null;     // Logged in user name
 let currentSector = null;   // Currently selected sector number
 let sectorTimerInterval = null; // Interval reference for sector timer
+// Broadcast channel for cross-tab communication (online status, friend requests, invites).
+// Using BroadcastChannel allows different tabs of the same browser to communicate without a server.
+const channel = new BroadcastChannel('workGrandPrixChannel');
+// Keep track of who is currently online (across tabs). When a user logs in or out we update this map.
+let onlineUsers = {};
+
+/**
+ * Ensure the social data (friends and friend requests) exist for a user.
+ * This helper creates empty arrays if they are missing.
+ */
+function ensureUserSocialData(username) {
+  if (!data.users[username].friends) {
+    data.users[username].friends = [];
+  }
+  if (!data.users[username].friendRequests) {
+    data.users[username].friendRequests = [];
+  }
+}
+
+/**
+ * Add a friend relationship locally between the current user and another user.
+ * Also cleans up any pending friend requests between the two users.
+ */
+function addFriendLocal(friend) {
+  ensureUserSocialData(currentUser);
+  ensureUserSocialData(friend);
+  if (!data.users[currentUser].friends.includes(friend)) {
+    data.users[currentUser].friends.push(friend);
+  }
+  if (!data.users[friend].friends.includes(currentUser)) {
+    data.users[friend].friends.push(currentUser);
+  }
+  // remove friend from current user's pending requests
+  const idx = data.users[currentUser].friendRequests.indexOf(friend);
+  if (idx !== -1) {
+    data.users[currentUser].friendRequests.splice(idx, 1);
+  }
+  // remove current user from friend's pending requests
+  const idx2 = data.users[friend].friendRequests.indexOf(currentUser);
+  if (idx2 !== -1) {
+    data.users[friend].friendRequests.splice(idx2, 1);
+  }
+  saveData();
+}
 
 /**
  * Utility: Get current date string in YYYY-MM-DD format.
@@ -98,6 +142,71 @@ function loadCurrentUser() {
 }
 
 /**
+ * Announce to other tabs that this user is online/offline.
+ * Uses the BroadcastChannel defined at the top of the script.
+ */
+function announceOnline(user) {
+  channel.postMessage({ type: 'online', user });
+}
+
+function announceOffline(user) {
+  channel.postMessage({ type: 'offline', user });
+}
+
+// Listen for messages from other tabs for online presence, friend requests, accepts and race invites.
+channel.onmessage = (event) => {
+  const msg = event.data || {};
+  switch (msg.type) {
+    case 'online':
+      // mark user as online
+      onlineUsers[msg.user] = true;
+      if (currentUser) {
+        renderFriendsAndOnline();
+      }
+      break;
+    case 'offline':
+      // remove user from online list
+      delete onlineUsers[msg.user];
+      if (currentUser) {
+        renderFriendsAndOnline();
+      }
+      break;
+    case 'friendRequest':
+      if (msg.to === currentUser) {
+        // ensure lists exist
+        ensureUserSocialData(currentUser);
+        // if not already friends or already requested
+        const from = msg.from;
+        const alreadyFriend = data.users[currentUser].friends && data.users[currentUser].friends.includes(from);
+        const alreadyRequested = data.users[currentUser].friendRequests && data.users[currentUser].friendRequests.includes(from);
+        if (!alreadyFriend && !alreadyRequested) {
+          data.users[currentUser].friendRequests.push(from);
+          saveData();
+          renderFriendsAndOnline();
+        }
+      }
+      break;
+    case 'friendAccepted':
+      if (msg.to === currentUser) {
+        addFriendLocal(msg.from);
+        renderFriendsAndOnline();
+      }
+      break;
+    case 'raceInvite':
+      if (msg.to === currentUser) {
+        // simple confirm to accept invite
+        if (confirm(`${msg.from} invited you to race! Start now?`)) {
+          // navigate to sector selection for a new race
+          renderSectorSelection();
+        }
+      }
+      break;
+    default:
+      break;
+  }
+};
+
+/**
  * Compute weekly leaderboard for the current week (Monday–Saturday).
  * Returns an array of objects { username, totalTimeMs } sorted by time.
  */
@@ -171,6 +280,95 @@ function renderLeaderboard(container) {
 }
 
 /**
+ * Render friends, friend requests, and online users with actions.
+ * Called within renderWelcome and whenever presence or social data changes.
+ */
+function renderFriendsAndOnline() {
+  const container = document.getElementById('friends-container');
+  if (!container) return;
+  container.innerHTML = '';
+  ensureUserSocialData(currentUser);
+  // Friend Requests
+  const requests = data.users[currentUser].friendRequests || [];
+  if (requests.length > 0) {
+    const reqTitle = document.createElement('h4');
+    reqTitle.textContent = 'Friend Requests';
+    container.appendChild(reqTitle);
+    requests.forEach(reqUser => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '10px';
+      const span = document.createElement('span');
+      span.textContent = reqUser;
+      row.appendChild(span);
+      const acceptBtn = document.createElement('button');
+      acceptBtn.className = 'button small';
+      acceptBtn.textContent = 'Accept';
+      acceptBtn.addEventListener('click', () => {
+        addFriendLocal(reqUser);
+        channel.postMessage({ type: 'friendAccepted', from: currentUser, to: reqUser });
+        renderFriendsAndOnline();
+      });
+      row.appendChild(acceptBtn);
+      container.appendChild(row);
+    });
+  }
+  // Friends list
+  const friendsList = data.users[currentUser].friends || [];
+  if (friendsList.length > 0) {
+    const friendsTitle = document.createElement('h4');
+    friendsTitle.textContent = 'Your Friends';
+    container.appendChild(friendsTitle);
+    friendsList.forEach(friend => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '10px';
+      const span = document.createElement('span');
+      span.textContent = friend;
+      row.appendChild(span);
+      if (onlineUsers[friend]) {
+        const inviteBtn = document.createElement('button');
+        inviteBtn.className = 'button small';
+        inviteBtn.textContent = 'Invite to Race';
+        inviteBtn.addEventListener('click', () => {
+          channel.postMessage({ type: 'raceInvite', from: currentUser, to: friend });
+          alert(`Race invite sent to ${friend}.`);
+        });
+        row.appendChild(inviteBtn);
+      }
+      container.appendChild(row);
+    });
+  }
+  // Online users who are not friends
+  const others = Object.keys(onlineUsers).filter(u => u !== currentUser && !friendsList.includes(u));
+  if (others.length > 0) {
+    const onlineTitle = document.createElement('h4');
+    onlineTitle.textContent = 'Online Users';
+    container.appendChild(onlineTitle);
+    others.forEach(user => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '10px';
+      const span = document.createElement('span');
+      span.textContent = user;
+      row.appendChild(span);
+      const addBtn = document.createElement('button');
+      addBtn.className = 'button small';
+      addBtn.textContent = 'Add Friend';
+      addBtn.addEventListener('click', () => {
+        channel.postMessage({ type: 'friendRequest', from: currentUser, to: user });
+        alert(`Friend request sent to ${user}.`);
+      });
+      row.appendChild(addBtn);
+      container.appendChild(row);
+    });
+  }
+}
+
+/**
  * Render login or register form.
  */
 function renderAuthForm(isLogin = true) {
@@ -214,9 +412,12 @@ function renderAuthForm(isLogin = true) {
         alert('Username already exists. Please choose another.');
         return;
       }
+      // create user with password, empty records and empty social data
       data.users[username] = {
         password: password,
-        records: {}
+        records: {},
+        friends: [],
+        friendRequests: []
       };
       saveData();
       alert('Account created! You can now log in.');
@@ -303,6 +504,10 @@ function renderWelcome() {
   logoutBtn.style.marginTop = '20px';
   logoutBtn.innerHTML = '<i class="fa-solid fa-sign-out-alt"></i> Logout';
   logoutBtn.addEventListener('click', () => {
+    // announce offline presence
+    if (currentUser) {
+      announceOffline(currentUser);
+    }
     currentUser = null;
     clearCurrentUser();
     renderAuthForm(true);
@@ -318,9 +523,18 @@ function renderWelcome() {
   lbBody.id = 'leaderboard-body';
   leaderboardDiv.appendChild(lbBody);
   container.appendChild(leaderboardDiv);
+  // Friends & online container
+  const friendsDiv = document.createElement('div');
+  friendsDiv.id = 'friends-container';
+  friendsDiv.className = 'friends-container';
+  container.appendChild(friendsDiv);
   app.appendChild(container);
   // render leaderboard
   renderLeaderboard(lbBody);
+  // render friends/online lists
+  renderFriendsAndOnline();
+  // announce that current user is online
+  announceOnline(currentUser);
 }
 
 /**
@@ -397,11 +611,7 @@ function ensureCurrentSectorData() {
 function renderSectorTasks() {
   ensureCurrentSectorData();
   const sectorData = data.users[currentUser].records[getTodayKey()].sectors[currentSector];
-  // if sector start time is null, set to now
-  if (!sectorData.startTime) {
-    sectorData.startTime = Date.now();
-    saveData();
-  }
+  // Do not auto start the sector timer. The user must enter tasks and press Ready.
   clearInterval(sectorTimerInterval);
   const app = document.getElementById('app');
   app.innerHTML = '';
@@ -438,6 +648,11 @@ function renderSectorTasks() {
   addBtn.className = 'button small';
   addBtn.innerHTML = '<i class="fa-solid fa-plus"></i> Add Task';
   addBtn.addEventListener('click', () => {
+    // prevent adding new tasks after sector start
+    if (sectorData.startTime) {
+      alert('Cannot add tasks after the sector has started.');
+      return;
+    }
     if (sectorData.tasks.length >= MAX_TASKS) {
       alert(`Maximum ${MAX_TASKS} tasks allowed in a sector.`);
       return;
@@ -460,6 +675,11 @@ function renderSectorTasks() {
   removeBtn.className = 'button small secondary';
   removeBtn.innerHTML = '<i class="fa-solid fa-minus"></i> Remove Task';
   removeBtn.addEventListener('click', () => {
+    // prevent removing tasks after sector start
+    if (sectorData.startTime) {
+      alert('Cannot remove tasks after the sector has started.');
+      return;
+    }
     if (sectorData.tasks.length <= MIN_TASKS) {
       alert(`Minimum ${MIN_TASKS} tasks required in a sector.`);
       return;
@@ -471,10 +691,33 @@ function renderSectorTasks() {
   controls.appendChild(addBtn);
   controls.appendChild(removeBtn);
   app.appendChild(controls);
+  // Ready button to start the sector after entering tasks
+  const readyBtn = document.createElement('button');
+  readyBtn.className = 'button';
+  readyBtn.style.marginTop = '20px';
+  readyBtn.innerHTML = '<i class="fa-solid fa-flag"></i> Ready';
+  readyBtn.addEventListener('click', () => {
+    // ensure minimum tasks
+    if (sectorData.tasks.length < MIN_TASKS) {
+      alert(`Please add at least ${MIN_TASKS} tasks before starting.`);
+      return;
+    }
+    // start countdown before starting the sector
+    readyBtn.disabled = true;
+    startCountdown(() => {
+      sectorData.startTime = Date.now();
+      saveData();
+      // start timer interval
+      updateSectorTimer();
+      clearInterval(sectorTimerInterval);
+      sectorTimerInterval = setInterval(updateSectorTimer, 1000);
+    });
+  });
+  app.appendChild(readyBtn);
   // back button to sectors
   const backBtn = document.createElement('button');
   backBtn.className = 'button secondary small';
-  backBtn.style.marginTop = '20px';
+  backBtn.style.marginTop = '10px';
   backBtn.innerHTML = '<i class="fa-solid fa-arrow-left"></i> Back to Sectors';
   backBtn.addEventListener('click', () => {
     renderSectorSelection();
@@ -532,6 +775,11 @@ function renderSectorTasks() {
       startBtn.className = 'button small';
       startBtn.innerHTML = '<i class="fa-solid fa-play"></i> Start';
       startBtn.addEventListener('click', () => {
+        // do not allow starting tasks before sector start
+        if (!sectorData.startTime) {
+          alert('You need to start the sector first by clicking Ready.');
+          return;
+        }
         if (task.status === 'Finished') {
           alert('Task already finished.');
           return;
@@ -620,8 +868,14 @@ function renderSectorTasks() {
   }
   updateTaskRows();
 
-  // start sector timer
+  // sector timer update
   function updateSectorTimer() {
+    if (!sectorData.startTime) {
+      // timer not started yet: show full duration
+      timerElem.textContent = formatDuration(SECTOR_DURATION_MS);
+      updateTaskRows();
+      return;
+    }
     const now = Date.now();
     const elapsed = now - sectorData.startTime;
     const remaining = SECTOR_DURATION_MS - elapsed;
@@ -635,8 +889,14 @@ function renderSectorTasks() {
     // also refresh task elapsed times
     updateTaskRows();
   }
+  // initial display
   updateSectorTimer();
-  sectorTimerInterval = setInterval(updateSectorTimer, 1000);
+  // start interval only if sector already started
+  if (sectorData.startTime) {
+    sectorTimerInterval = setInterval(updateSectorTimer, 1000);
+  } else {
+    sectorTimerInterval = null;
+  }
 }
 
 /**
@@ -651,6 +911,41 @@ function init() {
     clearCurrentUser();
     renderAuthForm(true);
   }
+}
+
+/**
+ * Display a Formula 1–style countdown before starting a sector.
+ * Creates an overlay with five lights that illuminate sequentially each second.
+ * When the countdown completes, the provided callback is invoked.
+ */
+function startCountdown(callback) {
+  // create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'countdown-overlay';
+  // create lights
+  const lights = [];
+  for (let i = 0; i < 5; i++) {
+    const light = document.createElement('div');
+    light.className = 'countdown-light';
+    overlay.appendChild(light);
+    lights.push(light);
+  }
+  document.body.appendChild(overlay);
+  let step = 0;
+  function ignite() {
+    if (step < lights.length) {
+      lights[step].classList.add('active');
+      step++;
+      setTimeout(ignite, 1000);
+    } else {
+      // all lights lit: wait half second then remove overlay and call callback
+      setTimeout(() => {
+        overlay.remove();
+        if (typeof callback === 'function') callback();
+      }, 500);
+    }
+  }
+  ignite();
 }
 
 // Start the application
