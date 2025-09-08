@@ -382,7 +382,9 @@ function computeCurrentWeekLeaderboard() {
         }
       }
     }
-    if (total > 0) {
+    // Always include users who have earned points this week even if total duration is zero.
+    const points = (userData.points === undefined ? 0 : userData.points);
+    if (total > 0 || points > 0) {
       results.push({ username, totalTimeMs: total });
     }
   }
@@ -1109,16 +1111,26 @@ async function renderSectorTasks() {
     // automatically stop the sector timer. This is called after each
     // task finish. Additional sector-level points could be awarded
     // here based on remaining time.
-    function checkSectorCompletion() {
-      const allDone = sectorData.tasks.length > 0 && sectorData.tasks.every(t => t.status === 'Finished');
-      if (allDone) {
-        // Stop the sector timer and reset interval
-        clearInterval(sectorTimerInterval);
-        sectorTimerInterval = null;
-        // Optionally compute sector-level bonus points for remaining time
-        // by rewarding efficiency. For now, we do not award extra points.
-      }
-    }
+        function checkSectorCompletion() {
+          // Determine whether every task in this sector is marked as Finished.
+          const allDone = sectorData.tasks.length > 0 && sectorData.tasks.every(t => t.status === 'Finished');
+          if (allDone) {
+            // Stop the sector timer and clear the interval. This ensures the
+            // countdown display no longer updates.
+            clearInterval(sectorTimerInterval);
+            sectorTimerInterval = null;
+            // Explicitly set the timer display to 00:00 so the user sees the
+            // sector has ended even if the timer interval was already stopped.
+            timerElem.textContent = '00:00';
+            // Update the leaderboard again since all tasks are finished and
+            // points for this sector should now be reflected. We reference the
+            // leaderboard body by id to avoid passing stale DOM nodes.
+            const lbBodyEl = document.getElementById('leaderboard-body');
+            if (lbBodyEl) {
+              renderLeaderboard(lbBodyEl);
+            }
+          }
+        }
 }
 
 /**
