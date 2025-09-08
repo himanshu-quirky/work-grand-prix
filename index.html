@@ -25,13 +25,19 @@
   <!-- Load Supabase UMD build. The library attaches itself as window.supabase. We use defer so it
        loads after the document is parsed. -->
   <script defer src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-  <!-- Load our Supabase client helper (ES module). This script depends on the
-       globals defined above and the Supabase library. -->
-  <script type="module" src="supabaseClient.js"></script>
+  <!-- Load our Supabase client helper. We load it as a classic script (not a module)
+       because the file attaches its helpers directly to the global `window`.
+       Loading it as a module would put the exports into module scope and
+       potentially prevent the helpers from being available when main.js runs. -->
+  <script defer src="supabaseClient.js"></script>
 </head>
 <body>
   <div id="app"></div>
   <!-- Load main application logic as an ES module so we can use import statements. -->
-  <script type="module" src="main.js"></script>
+  <!-- Load main application logic. This script does not use ES module imports
+       because GitHub Pages may mangle import lines. Instead, supabaseClient.js
+       attaches its helpers to the global window object, and main.js reads
+       them from there. -->
+  <script defer src="main.js"></script>
 </body>
 </html>
