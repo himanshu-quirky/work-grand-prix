@@ -575,15 +575,45 @@ function renderAuthForm(isLogin = true) {
         // Attempt to sign in using Supabase auth via pseudo‑email.  Read the helper
         // functions from the global `window` object at call time.  This avoids issues
         // where the helpers may not yet be defined when this script is parsed.
+        // Grab the helper from the global object.  When running on GitHub Pages
+        // there is a chance that supabaseClient.js failed to attach the helper
+        // functions, so fall back to calling the Supabase auth API directly.
         const signInFn = window.signInUsername;
-        if (typeof signInFn !== 'function') {
-          throw new Error('signInUsername helper is not available. The Supabase client may not have loaded yet.');
+        let user;
+        if (typeof signInFn === 'function') {
+          // Preferred path: use the helper provided by supabaseClient.js
+          user = await signInFn(username, password);
+        } else {
+          // Fallback: call the Supabase auth client directly using a pseudo‑email
+          const email = `${username}@wgp.local`;
+          const { data, error } = await supa.auth.signInWithPassword({ email, password });
+          if (error) {
+            throw new Error(error.message || 'Login failed');
+          }
+          user = data.user;
+          // Note: profile insertion is handled on signup; we just return the auth user here
         }
-        const user = await signInFn(username, password);
         sessionUser = user;
-        // Fetch the profile via the global helper as well
-        const getProfileFn = window.getCurrentProfile;
-        profile = getProfileFn ? await getProfileFn() : null;
+        // Fetch the profile via the global helper if available, otherwise query Supabase
+        let getProfileFn = window.getCurrentProfile;
+        if (typeof getProfileFn === 'function') {
+          profile = await getProfileFn();
+        } else if (sessionUser) {
+          try {
+            const { data: prof, error } = await supa.from('profiles').select('*').eq('id', sessionUser.id).single();
+            if (error) {
+              console.warn('Supabase profile fetch error:', error);
+              profile = null;
+            } else {
+              profile = prof;
+            }
+          } catch (err) {
+            console.warn('Profile lookup failed:', err);
+            profile = null;
+          }
+        } else {
+          profile = null;
+        }
         // ensure we have social data locally
         if (!data.users[username]) {
           // Initialise social lists and points for new users.  Points
@@ -598,13 +628,46 @@ function renderAuthForm(isLogin = true) {
       } else {
         // Registration: create auth user in Supabase and local social data
         const signUpFn = window.signUpUsername;
-        if (typeof signUpFn !== 'function') {
-          throw new Error('signUpUsername helper is not available. The Supabase client may not have loaded yet.');
+        let newUser;
+        if (typeof signUpFn === 'function') {
+          // Preferred path: delegate to supabaseClient helper which handles profile upsert
+          newUser = await signUpFn(username, password);
+        } else {
+          // Fallback: create auth user directly and insert a profile row
+          const email = `${username}@wgp.local`;
+          const { data, error } = await supa.auth.signUp({ email, password });
+          if (error) {
+            throw new Error(error.message || 'Registration failed');
+          }
+          newUser = data.user;
+          // Upsert profile row with default role 'user'
+          try {
+            await supa.from('profiles').upsert({ id: newUser.id, username: username, role: 'user' });
+          } catch (e) {
+            console.warn('Supabase profile upsert error:', e);
+          }
         }
-        const newUser = await signUpFn(username, password);
         sessionUser = newUser;
-        const getProfileFn2 = window.getCurrentProfile;
-        profile = getProfileFn2 ? await getProfileFn2() : null;
+        // Fetch profile using helper if available, else query Supabase
+        let getProfileFn2 = window.getCurrentProfile;
+        if (typeof getProfileFn2 === 'function') {
+          profile = await getProfileFn2();
+        } else if (sessionUser) {
+          try {
+            const { data: prof, error } = await supa.from('profiles').select('*').eq('id', sessionUser.id).single();
+            if (error) {
+              console.warn('Supabase profile fetch error:', error);
+              profile = null;
+            } else {
+              profile = prof;
+            }
+          } catch (err) {
+            console.warn('Profile lookup failed:', err);
+            profile = null;
+          }
+        } else {
+          profile = null;
+        }
         if (!data.users[username]) {
           data.users[username] = { friends: [], friendRequests: [], points: 0 };
         }
