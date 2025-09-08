@@ -1,10 +1,10 @@
 // Main script for Work Grand Prix
 
-// Import Supabase helpers. These functions are defined in
-// supabaseClient.js and allow us to create users, sign in and fetch
-// profiles. Because this file is loaded as a module (see index.html),
-// the import syntax is supported.
-// import { supa, signUpUsername, signInUsername, getCurrentProfile } from './supabaseClient.js';
+// Import Supabase helpers. These functions are normally imported from
+// supabaseClient.js, but on GitHub Pages the ES module import may be
+// stripped or broken. To support classic scripts, supabaseClient.js
+// attaches these helpers to the global `window` object. Read them
+// directly from `window` here.
 const supa = window.supa;
 const signUpUsername = window.signUpUsername;
 const signInUsername = window.signInUsername;
@@ -24,6 +24,14 @@ const CURRENT_USER_KEY = 'workGrandPrixCurrentUser';
 const SECTOR_DURATION_MS = 45 * 60 * 1000; // 45 minutes in milliseconds
 const MIN_TASKS = 4;
 const MAX_TASKS = 15;
+
+// Points awarded per finished task. You can tune this constant to award
+// more or fewer points per completed task. When a task is finished,
+// the user will earn this many points which are added to their profile
+// and used in the weekly leaderboard. Points are stored in the
+// `data.users[username].points` field and synced to Supabase if the
+// user is authenticated.
+const POINTS_PER_TASK = 25;
 
 let data = null;            // Loaded data from localStorage
 let currentUser = null;     // Logged in user name
@@ -45,6 +53,12 @@ function ensureUserSocialData(username) {
   }
   if (!data.users[username].friendRequests) {
     data.users[username].friendRequests = [];
+  }
+  // Initialise points for the user if missing.  Points accumulate as
+  // tasks are completed. Without this check the field might be undefined
+  // for existing users.
+  if (data.users[username].points === undefined) {
+    data.users[username].points = 0;
   }
 }
 
@@ -380,29 +394,44 @@ function computeCurrentWeekLeaderboard() {
  * Update leaderboard display.
  */
 async function renderLeaderboard(container) {
-  // Fetch leaderboard from Supabase if available or fallback to local computation
+  // Fetch leaderboard based on duration; fallback to local computation
   const results = await fetchWeeklyLeaderboard();
   if (!results || results.length === 0) {
     container.innerHTML = '<p>No data for this week yet.</p>';
     return;
   }
+  // Combine duration results with points.  Points are stored locally
+  // in data.users[username].points; if the user record is missing or
+  // points undefined, default to zero.  Sort primarily by points (desc)
+  // and secondarily by total time (asc) to break ties.
+  const combined = results.map((r) => {
+    const pts = (data.users[r.username] && typeof data.users[r.username].points === 'number') ? data.users[r.username].points : 0;
+    return { username: r.username, totalTimeMs: r.totalTimeMs, points: pts };
+  });
+  combined.sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points; // higher points first
+    return a.totalTimeMs - b.totalTimeMs; // lower time as tiebreaker
+  });
   const table = document.createElement('table');
   table.className = 'leaderboard-table';
   const thead = document.createElement('thead');
-  thead.innerHTML = '<tr><th>Position</th><th>Driver</th><th>Total Time</th></tr>';
+  thead.innerHTML = '<tr><th>Pos.</th><th>Driver</th><th>Points</th><th>Total Time</th></tr>';
   table.appendChild(thead);
   const tbody = document.createElement('tbody');
-  results.forEach((item, index) => {
+  combined.forEach((item, index) => {
     const tr = document.createElement('tr');
     const posTd = document.createElement('td');
     posTd.className = 'position';
     posTd.textContent = index + 1;
     const nameTd = document.createElement('td');
     nameTd.textContent = item.username;
+    const pointsTd = document.createElement('td');
+    pointsTd.textContent = item.points;
     const timeTd = document.createElement('td');
     timeTd.textContent = formatDuration(item.totalTimeMs);
     tr.appendChild(posTd);
     tr.appendChild(nameTd);
+    tr.appendChild(pointsTd);
     tr.appendChild(timeTd);
     tbody.appendChild(tr);
   });
@@ -531,7 +560,9 @@ function renderAuthForm(isLogin = true) {
         profile = await getCurrentProfile();
         // ensure we have social data locally
         if (!data.users[username]) {
-          data.users[username] = { friends: [], friendRequests: [] };
+          // Initialise social lists and points for new users.  Points
+          // start at zero and accumulate as tasks are completed.
+          data.users[username] = { friends: [], friendRequests: [], points: 0 };
         }
         currentUser = username;
         saveCurrentUser(username);
@@ -544,7 +575,7 @@ function renderAuthForm(isLogin = true) {
         sessionUser = newUser;
         profile = await getCurrentProfile();
         if (!data.users[username]) {
-          data.users[username] = { friends: [], friendRequests: [] };
+          data.users[username] = { friends: [], friendRequests: [], points: 0 };
         }
         saveData();
         alert('Account created! You can now log in.');
@@ -1006,21 +1037,33 @@ async function renderSectorTasks() {
           alert('Start the task before finishing.');
           return;
         }
-        // if paused, accumulate pause duration
+        // If paused, accumulate pause duration before finishing
         if (task.status === 'Paused' && task.pauseStart) {
           task.pauseDuration += Date.now() - task.pauseStart;
           task.pauseStart = null;
         }
+        // Compute duration and mark task as finished
         task.endTime = Date.now();
         task.duration = task.endTime - task.startTime - task.pauseDuration;
         if (task.duration < 0) task.duration = 0;
         task.status = 'Finished';
+        // Award points for finishing this task
+        const earned = POINTS_PER_TASK;
+        data.users[currentUser].points = (data.users[currentUser].points || 0) + earned;
+        // Persist local changes
         saveData();
-        // persist finished state
+        // Persist finished state and points to Supabase (best effort)
         saveTaskToSupabase(getTodayKey(), currentSector, task);
+        if (sessionUser) {
+          // Update points on the profile; ignore errors
+          supa.from('profiles').update({ points: data.users[currentUser].points }).eq('id', sessionUser.id).catch(() => {});
+        }
+        // Refresh UI
         updateTaskRows();
-        // update leaderboard on finish
+        // Update leaderboard display
         renderLeaderboard(document.getElementById('leaderboard-body'));
+        // Check if all tasks are finished and stop the timer if so
+        checkSectorCompletion();
       });
       actionsTd.appendChild(startBtn);
       actionsTd.appendChild(pitBtn);
@@ -1061,6 +1104,21 @@ async function renderSectorTasks() {
   } else {
     sectorTimerInterval = null;
   }
+
+    // Helper: check if all tasks in the current sector are finished.  If so,
+    // automatically stop the sector timer. This is called after each
+    // task finish. Additional sector-level points could be awarded
+    // here based on remaining time.
+    function checkSectorCompletion() {
+      const allDone = sectorData.tasks.length > 0 && sectorData.tasks.every(t => t.status === 'Finished');
+      if (allDone) {
+        // Stop the sector timer and reset interval
+        clearInterval(sectorTimerInterval);
+        sectorTimerInterval = null;
+        // Optionally compute sector-level bonus points for remaining time
+        // by rewarding efficiency. For now, we do not award extra points.
+      }
+    }
 }
 
 /**
@@ -1068,6 +1126,14 @@ async function renderSectorTasks() {
  */
 async function init() {
   data = loadData();
+  // Ensure all loaded users have social data and points fields.  This
+  // normalises older localStorage data which may not include the
+  // new points field.
+  if (data && data.users) {
+    for (const uname of Object.keys(data.users)) {
+      ensureUserSocialData(uname);
+    }
+  }
   // Attempt to restore Supabase session. If a session exists it will be
   // returned even after a page refresh. When a user logs out the session is
   // cleared automatically by the Supabase client.
