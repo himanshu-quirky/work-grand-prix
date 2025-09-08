@@ -571,11 +571,19 @@ function renderAuthForm(isLogin = true) {
       return;
     }
     try {
-      if (isLogin) {
-        // Attempt to sign in using Supabase auth via pseudo‑email. Throws on failure.
-        const user = await signInUsername(username, password);
+        if (isLogin) {
+        // Attempt to sign in using Supabase auth via pseudo‑email.  Read the helper
+        // functions from the global `window` object at call time.  This avoids issues
+        // where the helpers may not yet be defined when this script is parsed.
+        const signInFn = window.signInUsername;
+        if (typeof signInFn !== 'function') {
+          throw new Error('signInUsername helper is not available. The Supabase client may not have loaded yet.');
+        }
+        const user = await signInFn(username, password);
         sessionUser = user;
-        profile = await getCurrentProfile();
+        // Fetch the profile via the global helper as well
+        const getProfileFn = window.getCurrentProfile;
+        profile = getProfileFn ? await getProfileFn() : null;
         // ensure we have social data locally
         if (!data.users[username]) {
           // Initialise social lists and points for new users.  Points
@@ -589,9 +597,14 @@ function renderAuthForm(isLogin = true) {
         renderWelcome();
       } else {
         // Registration: create auth user in Supabase and local social data
-        const newUser = await signUpUsername(username, password);
+        const signUpFn = window.signUpUsername;
+        if (typeof signUpFn !== 'function') {
+          throw new Error('signUpUsername helper is not available. The Supabase client may not have loaded yet.');
+        }
+        const newUser = await signUpFn(username, password);
         sessionUser = newUser;
-        profile = await getCurrentProfile();
+        const getProfileFn2 = window.getCurrentProfile;
+        profile = getProfileFn2 ? await getProfileFn2() : null;
         if (!data.users[username]) {
           data.users[username] = { friends: [], friendRequests: [], points: 0 };
         }
