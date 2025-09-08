@@ -287,6 +287,22 @@ async function fetchWeeklyLeaderboard() {
 }
 
 /**
+ * Local fallback for the weekly leaderboard.  When the user is not
+ * authenticated or Supabase is unavailable, we compute the weekly
+ * leaderboard from localStorage.  This function delegates to
+ * computeCurrentWeekLeaderboard() and is defined here because
+ * fetchWeeklyLeaderboard() references it.  Without this helper
+ * defined, the call would throw a ReferenceError and the
+ * leaderboard would appear blank.
+ *
+ * @returns {Array<{username: string, totalTimeMs: number}>} An array
+ *          of objects with username and total time in milliseconds.
+ */
+function weeklyLeaderboard() {
+  return computeCurrentWeekLeaderboard();
+}
+
+/**
  * Announce to other tabs that this user is online/offline.
  * Uses the BroadcastChannel defined at the top of the script.
  */
