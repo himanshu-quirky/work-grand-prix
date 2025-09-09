@@ -10,6 +10,24 @@ const signUpUsername = window.signUpUsername;
 const signInUsername = window.signInUsername;
 const getCurrentProfile = window.getCurrentProfile;
 
+// If the Supabase client failed to initialise (e.g. the library didn't
+// load or was blocked), then `supa` may be undefined or missing the
+// `auth` namespace. Provide a user‑friendly alert to avoid cryptic
+// runtime errors when attempting to access supa.auth.*. Without this
+// guard, calling `supa.auth` when `supa` is undefined will throw
+// "Cannot read properties of undefined (reading 'auth')" which is
+// confusing. This check runs at script evaluation time before any
+// authentication calls.
+if (!supa || !supa.auth) {
+  console.warn('Supabase client not initialised. The authentication client is unavailable.');
+  // Provide a minimal fallback interface to prevent further errors.
+  // We stub an empty auth object so that property accesses do not crash.
+  // The fallback does not perform any network calls.
+  window.supa = {
+    auth: {}
+  };
+}
+
 // The currently authenticated Supabase user and their profile. These
 // variables are set after login or registration. If null, no user is
 // logged in.
@@ -578,12 +596,18 @@ function renderAuthForm(isLogin = true) {
         // Grab the helper from the global object.  When running on GitHub Pages
         // there is a chance that supabaseClient.js failed to attach the helper
         // functions, so fall back to calling the Supabase auth API directly.
+        // Attempt to sign in using our Supabase helpers or fall back to the
+        // Supabase client. Guard against the Supabase library not loading.
         const signInFn = window.signInUsername;
         let user;
         if (typeof signInFn === 'function') {
           // Preferred path: use the helper provided by supabaseClient.js
           user = await signInFn(username, password);
         } else {
+          // Ensure the Supabase client is available before calling it directly.
+          if (!supa || !supa.auth) {
+            throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+          }
           // Fallback: call the Supabase auth client directly using a pseudo‑email
           const email = `${username}@wgp.local`;
           const { data, error } = await supa.auth.signInWithPassword({ email, password });

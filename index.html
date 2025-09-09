@@ -22,14 +22,31 @@
     window.SUPABASE_URL = "https://ihlcpsqisoklqvcllejz.supabase.co";
     window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlobGNwc3Fpc29rbHF2Y2xsZWp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcyNDE2MzYsImV4cCI6MjA3MjgxNzYzNn0.bC3_KtS1JkXOlNj17QpN0oBD8U4xlfPHfAQa6MSYXHI";
   </script>
-  <!-- Load Supabase UMD build. The library attaches itself as window.supabase. We use defer so it
-       loads after the document is parsed. -->
-  <script defer src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <!-- Load Supabase library from jsDelivr CDN. The library attaches itself as
+       window.supabase. We use the short @2 version to fetch the latest 2.x
+       build and include a version query to ensure browsers fetch the new
+       version when updated. Using jsDelivr improves reliability compared to
+       unpkg in restricted environments. -->
+  <!--
+       Load the Supabase UMD build from jsDelivr. We pin to the v2 major range
+       ("@2") so that we always get a 2.x release. The library attaches
+       itself to `window.supabase` when loaded as a classic script. Using
+       jsDelivr improves reliability in environments where unpkg may be
+       blocked. We do not append a query parameter here because the CDN
+       already handles versioning.
+  -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- Load our Supabase client helper. We load it as a classic script (not a module)
        because the file attaches its helpers directly to the global `window`.
        Loading it as a module would put the exports into module scope and
        potentially prevent the helpers from being available when main.js runs. -->
-  <script defer src="supabaseClient.js"></script>
+  <!--
+       Load our Supabase client helper. We append a cache‑busting query
+       parameter (v=20250909) to ensure browsers fetch the latest version
+       whenever this file changes. The helper attaches its functions to
+       `window` and must be loaded before main.js.
+  -->
+  <script defer src="supabaseClient.js?v=20250909"></script>
 </head>
 <body>
   <div id="app"></div>
@@ -38,6 +55,12 @@
        because GitHub Pages may mangle import lines. Instead, supabaseClient.js
        attaches its helpers to the global window object, and main.js reads
        them from there. -->
-  <script defer src="main.js"></script>
+  <!--
+       Load the main application logic. We append a cache‑busting query
+       parameter (v=20250909) to force a fresh fetch when the script
+       changes. The script reads helpers from `window` and should be
+       loaded after supabaseClient.js.
+  -->
+  <script defer src="main.js?v=20250909"></script>
 </body>
 </html>
