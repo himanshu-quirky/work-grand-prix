@@ -107,8 +107,10 @@
     const user = data.user;
     // Derive a username from the email's local part (before the '@').
     const username = email.split('@')[0];
-    // Insert or update profile with derived username and default role
-    await supaClient.from('profiles').upsert({ id: user.id, username, role: 'user' });
+    // Determine role: grant admin role to designated emails
+    const role = ADMIN_EMAILS.includes(email) ? 'admin' : 'user';
+    // Insert or update profile with derived username and role
+    await supaClient.from('profiles').upsert({ id: user.id, username, role });
     return user;
   }
 
@@ -132,4 +134,15 @@
   // form inputs.
   window.signUpEmail = signUpEmail;
   window.signInEmail = signInEmail;
+
+  /**
+   * The list of email addresses that should be granted admin privileges
+   * automatically when they sign up. When a user registers with one of
+   * these emails, their profile is inserted with role 'admin' instead of
+   * the default 'user'. This is useful for seeding an initial admin
+   * account without requiring manual intervention in the Supabase UI.
+   */
+  const ADMIN_EMAILS = [
+    'himanshu@quirkyheads.in',
+  ];
 })();
