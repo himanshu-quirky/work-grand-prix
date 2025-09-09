@@ -89,4 +89,47 @@
   window.signUpUsername = signUpUsername;
   window.signInUsername = signInUsername;
   window.getCurrentProfile = getCurrentProfile;
+
+  /**
+   * Sign up a new user using a real email address. When using email as the
+   * identifier, we still need a display name (username) for the app. We
+   * derive a default username from the part of the email before the '@'
+   * symbol. After registration, we insert or update a row into the
+   * `profiles` table using the user ID returned by Supabase Auth. The
+   * role defaults to 'user'.
+   *
+   * @param {string} email A valid email address
+   * @param {string} password The desired password
+   */
+  async function signUpEmail(email, password) {
+    const { data, error } = await supaClient.auth.signUp({ email, password });
+    if (error) throw error;
+    const user = data.user;
+    // Derive a username from the email's local part (before the '@').
+    const username = email.split('@')[0];
+    // Insert or update profile with derived username and default role
+    await supaClient.from('profiles').upsert({ id: user.id, username, role: 'user' });
+    return user;
+  }
+
+  /**
+   * Sign in an existing user using their email address and password. This
+   * mirrors the username sign‑in but uses the real email directly. Throws
+   * if the credentials are invalid.
+   *
+   * @param {string} email The user's email address
+   * @param {string} password The user's password
+   */
+  async function signInEmail(email, password) {
+    const { data, error } = await supaClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data.user;
+  }
+
+  // Expose the new email helper functions on the global window.  These
+  // functions coexist with the username helpers so the app can support
+  // both modes if desired.  main.js chooses which to call based on the
+  // form inputs.
+  window.signUpEmail = signUpEmail;
+  window.signInEmail = signInEmail;
 })();

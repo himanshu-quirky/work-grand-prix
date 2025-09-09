@@ -582,10 +582,24 @@ function renderAuthForm(isLogin = true) {
   const form = document.createElement('form');
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const username = form.elements['username'].value.trim();
+    // Read the email field instead of username. We treat the input as an
+    // email address when using email‑based authentication.  For
+    // backwards compatibility, if the username field exists we fall back
+    // to reading it.  The `renderAuthForm` creates either a
+    // name='email' or name='username' input depending on the build.
+    const emailField = form.elements['email'];
+    const usernameField = form.elements['username'];
+    const email = emailField ? emailField.value.trim() : '';
+    const usernameInput = usernameField ? usernameField.value.trim() : '';
     const password = form.elements['password'].value;
-    if (!username || !password) {
-      alert('Please enter both username and password.');
+    // Determine which identifier to use.  Prefer the email if present,
+    // otherwise fall back to the username.  The login handler will use
+    // email-based helpers if an email is provided, or username-based
+    // helpers if only a username is provided.
+    const identifierEmail = email || (usernameInput.includes('@') ? usernameInput : '');
+    const identifierUsername = !identifierEmail ? usernameInput : '';
+    if (!(identifierEmail || identifierUsername) || !password) {
+      alert('Please enter both email/username and password.');
       return;
     }
     try {
@@ -598,24 +612,42 @@ function renderAuthForm(isLogin = true) {
         // functions, so fall back to calling the Supabase auth API directly.
         // Attempt to sign in using our Supabase helpers or fall back to the
         // Supabase client. Guard against the Supabase library not loading.
-        const signInFn = window.signInUsername;
         let user;
-        if (typeof signInFn === 'function') {
-          // Preferred path: use the helper provided by supabaseClient.js
-          user = await signInFn(username, password);
+        // Decide whether to use email or username based login
+        if (identifierEmail) {
+          // Email‑based login.  First attempt to call the signInEmail helper.
+          const signInEmailFn = window.signInEmail;
+          if (typeof signInEmailFn === 'function') {
+            user = await signInEmailFn(identifierEmail, password);
+          } else {
+            // Fallback: direct call to supabase auth
+            if (!supa || !supa.auth) {
+              throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+            }
+            const { data, error } = await supa.auth.signInWithPassword({ email: identifierEmail, password });
+            if (error) {
+              throw new Error(error.message || 'Login failed');
+            }
+            user = data.user;
+          }
         } else {
-          // Ensure the Supabase client is available before calling it directly.
-          if (!supa || !supa.auth) {
-            throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+          // Username‑based login (legacy pseudo‑email).  Use the
+          // signInUsername helper if available.
+          const signInFn = window.signInUsername;
+          if (typeof signInFn === 'function') {
+            user = await signInFn(identifierUsername, password);
+          } else {
+            // Fallback: use pseudo email with username@wgp.local
+            if (!supa || !supa.auth) {
+              throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+            }
+            const emailFallback = `${identifierUsername}@wgp.local`;
+            const { data, error } = await supa.auth.signInWithPassword({ email: emailFallback, password });
+            if (error) {
+              throw new Error(error.message || 'Login failed');
+            }
+            user = data.user;
           }
-          // Fallback: call the Supabase auth client directly using a pseudo‑email
-          const email = `${username}@wgp.local`;
-          const { data, error } = await supa.auth.signInWithPassword({ email, password });
-          if (error) {
-            throw new Error(error.message || 'Login failed');
-          }
-          user = data.user;
-          // Note: profile insertion is handled on signup; we just return the auth user here
         }
         sessionUser = user;
         // Fetch the profile via the global helper if available, otherwise query Supabase
@@ -638,37 +670,77 @@ function renderAuthForm(isLogin = true) {
         } else {
           profile = null;
         }
+        // Determine the local display name (alias). Prefer the
+        // profile.username if available, else derive from the email or
+        // fallback to identifierUsername.  The display name is used for
+        // friends, leaderboards and localStorage keys.
+        let alias;
+        if (profile && profile.username) {
+          alias = profile.username;
+        } else if (identifierEmail) {
+          // derive from email
+          alias = identifierEmail.split('@')[0];
+        } else {
+          alias = identifierUsername;
+        }
         // ensure we have social data locally
-        if (!data.users[username]) {
+        if (!data.users[alias]) {
           // Initialise social lists and points for new users.  Points
           // start at zero and accumulate as tasks are completed.
-          data.users[username] = { friends: [], friendRequests: [], points: 0 };
+          data.users[alias] = { friends: [], friendRequests: [], points: 0 };
         }
-        currentUser = username;
-        saveCurrentUser(username);
+        currentUser = alias;
+        saveCurrentUser(alias);
         saveData();
-        announceOnline(username);
+        announceOnline(alias);
         renderWelcome();
       } else {
         // Registration: create auth user in Supabase and local social data
-        const signUpFn = window.signUpUsername;
         let newUser;
-        if (typeof signUpFn === 'function') {
-          // Preferred path: delegate to supabaseClient helper which handles profile upsert
-          newUser = await signUpFn(username, password);
-        } else {
-          // Fallback: create auth user directly and insert a profile row
-          const email = `${username}@wgp.local`;
-          const { data, error } = await supa.auth.signUp({ email, password });
-          if (error) {
-            throw new Error(error.message || 'Registration failed');
+        if (identifierEmail) {
+          // Use email‑based registration
+          const signUpEmailFn = window.signUpEmail;
+          if (typeof signUpEmailFn === 'function') {
+            newUser = await signUpEmailFn(identifierEmail, password);
+          } else {
+            // Fallback: direct call to supabase auth
+            if (!supa || !supa.auth) {
+              throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+            }
+            const { data, error } = await supa.auth.signUp({ email: identifierEmail, password });
+            if (error) {
+              throw new Error(error.message || 'Registration failed');
+            }
+            newUser = data.user;
+            // Upsert profile with derived username
+            try {
+              const derivedUsername = identifierEmail.split('@')[0];
+              await supa.from('profiles').upsert({ id: newUser.id, username: derivedUsername, role: 'user' });
+            } catch (e) {
+              console.warn('Supabase profile upsert error:', e);
+            }
           }
-          newUser = data.user;
-          // Upsert profile row with default role 'user'
-          try {
-            await supa.from('profiles').upsert({ id: newUser.id, username: username, role: 'user' });
-          } catch (e) {
-            console.warn('Supabase profile upsert error:', e);
+        } else {
+          // Use username‑based registration (legacy pseudo‑email)
+          const signUpFn = window.signUpUsername;
+          if (typeof signUpFn === 'function') {
+            newUser = await signUpFn(identifierUsername, password);
+          } else {
+            if (!supa || !supa.auth) {
+              throw new Error('Supabase client not initialised. Please refresh the page or check your network connection.');
+            }
+            const pseudoEmail = `${identifierUsername}@wgp.local`;
+            const { data, error } = await supa.auth.signUp({ email: pseudoEmail, password });
+            if (error) {
+              throw new Error(error.message || 'Registration failed');
+            }
+            newUser = data.user;
+            // Upsert profile with username
+            try {
+              await supa.from('profiles').upsert({ id: newUser.id, username: identifierUsername, role: 'user' });
+            } catch (e) {
+              console.warn('Supabase profile upsert error:', e);
+            }
           }
         }
         sessionUser = newUser;
@@ -692,8 +764,17 @@ function renderAuthForm(isLogin = true) {
         } else {
           profile = null;
         }
-        if (!data.users[username]) {
-          data.users[username] = { friends: [], friendRequests: [], points: 0 };
+        // Determine alias for the new user
+        let alias2;
+        if (profile && profile.username) {
+          alias2 = profile.username;
+        } else if (identifierEmail) {
+          alias2 = identifierEmail.split('@')[0];
+        } else {
+          alias2 = identifierUsername;
+        }
+        if (!data.users[alias2]) {
+          data.users[alias2] = { friends: [], friendRequests: [], points: 0 };
         }
         saveData();
         alert('Account created! You can now log in.');
@@ -704,13 +785,14 @@ function renderAuthForm(isLogin = true) {
       alert(err.message || 'Authentication error.');
     }
   };
-  // username
-  const usernameLabel = document.createElement('label');
-  usernameLabel.textContent = 'Username';
-  const usernameInput = document.createElement('input');
-  usernameInput.type = 'text';
-  usernameInput.name = 'username';
-  usernameInput.autocomplete = 'username';
+  // email / username field
+  const emailLabel = document.createElement('label');
+  // When switching to email‑based auth, label the field as Email.
+  emailLabel.textContent = 'Email';
+  const emailInput = document.createElement('input');
+  emailInput.type = 'email';
+  emailInput.name = 'email';
+  emailInput.autocomplete = 'email';
   // password
   const passwordLabel = document.createElement('label');
   passwordLabel.textContent = 'Password';
@@ -723,8 +805,8 @@ function renderAuthForm(isLogin = true) {
   submitButton.className = 'button';
   submitButton.textContent = isLogin ? 'Login' : 'Register';
   // append elements
-  form.appendChild(usernameLabel);
-  form.appendChild(usernameInput);
+  form.appendChild(emailLabel);
+  form.appendChild(emailInput);
   form.appendChild(passwordLabel);
   form.appendChild(passwordInput);
   form.appendChild(submitButton);
