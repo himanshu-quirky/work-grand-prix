@@ -46,7 +46,12 @@
        whenever this file changes. The helper attaches its functions to
        `window` and must be loaded before main.js.
   -->
-  <script defer src="supabaseClient.js?v=20250909"></script>
+  <!--
+       Append a cache‑busting query parameter to supabaseClient.js. This
+       version string should be updated whenever the script changes to
+       force browsers and CDNs to fetch the latest version.
+  -->
+  <script defer src="supabaseClient.js?v=20250911"></script>
 </head>
 <body>
   <div id="app"></div>
@@ -61,6 +66,11 @@
        changes. The script reads helpers from `window` and should be
        loaded after supabaseClient.js.
   -->
-  <script defer src="main.js?v=20250909"></script>
+  <!--
+       Append a cache‑busting query parameter to main.js. This
+       version string should be updated whenever the script changes to
+       ensure clients load the new code instead of a cached copy.
+  -->
+  <script defer src="main.js?v=20250911"></script>
 </body>
 </html>
